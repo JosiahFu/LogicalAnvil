@@ -1,11 +1,14 @@
 {
-	"required": true,
-	"package": "archives.tater.logicalanvil.mixin",
-	"compatibilityLevel": "JAVA_17",
-	"mixins": [
-      "AnvilScreenHandlerMixin"
-	],
-	"injectors": {
-		"defaultRequire": 1
-	}
+  "required": true,
+  "package": "archives.tater.logicalanvil.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "AnvilScreenHandlerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "client": [
+    "AnvilScreenMixin"
+  ]
 }

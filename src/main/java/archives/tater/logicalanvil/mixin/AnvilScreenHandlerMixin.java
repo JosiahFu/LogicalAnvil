@@ -1,21 +1,20 @@
 package archives.tater.logicalanvil.mixin;
 
+import archives.tater.logicalanvil.LogicalAnvil;
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.EnchantmentHelper;
 import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.Inventory;
 import net.minecraft.item.EnchantedBookItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.screen.*;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.text.Text;
 import net.minecraft.util.Util;
 import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.*;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.Redirect;
 
 import java.util.Map;
 
@@ -55,9 +54,9 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 		Map<Enchantment, Integer> enchantments = EnchantmentHelper.get(resultItem);
 
 		int newCost = 0;
-		int repairCostSum = baseItem.getRepairCost() + sacrificeItem.getRepairCost();
-		int renameCost = 0;
-
+		int repairCost = baseItem.getRepairCost() + sacrificeItem.getRepairCost();
+		boolean repaired = false;
+		boolean enchanted = false;
 
 		this.repairItemUsage = 0;
 
@@ -77,9 +76,14 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 				for (repairCount = 0; clampedDamage > 0 && repairCount < sacrificeItem.getCount(); ++repairCount) {
 					int damageAfterRepair = resultItem.getDamage() - clampedDamage;
 					resultItem.setDamage(damageAfterRepair);
-					++newCost;
+					repairCost++;
+					newCost += repairCost;
+					if (repairCost >= 40) {
+						newCost = LogicalAnvil.TOO_EXPENSIVE_SIGNAL;
+					}
 					clampedDamage = Math.min(resultItem.getDamage(), resultItem.getMaxDamage() / 4);
 				}
+				repaired = true;
 				this.repairItemUsage = repairCount;
 			} else {
 				// COMBINATION
@@ -103,13 +107,15 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 					}
 					if (resultDamage < resultItem.getDamage()) {
 						resultItem.setDamage(resultDamage);
-						newCost += 2;
+						repairCost += 2;
+						newCost += repairCost;
+						if (repairCost >= 40)
+							newCost = LogicalAnvil.TOO_EXPENSIVE_SIGNAL;
 					}
 				}
 
 				// Enchantment transfer
 				Map<Enchantment, Integer> sacrificeEnchantments = EnchantmentHelper.get(sacrificeItem);
-				boolean anyAccepted = false;
 				boolean anyFailed = false;
 				for (Enchantment enchantment : sacrificeEnchantments.keySet()) {
 					int resultLevel;
@@ -122,14 +128,14 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 					}
 					for (Enchantment enchantment2 : enchantments.keySet()) {
 						if (enchantment2 == enchantment || enchantment.canCombine(enchantment2)) continue;
+						// else
 						acceptsEnchantment = false;
-						++newCost;
 					}
 					if (!acceptsEnchantment) {
 						anyFailed = true;
 						continue;
 					}
-					anyAccepted = true;
+					enchanted = true;
 					if (resultLevel > enchantment.getMaxLevel()) {
 						resultLevel = enchantment.getMaxLevel();
 					}
@@ -143,11 +149,19 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 					if (isEnchantedBook) {
 						costMultiplier = Math.max(1, costMultiplier / 2);
 					}
-					newCost += costMultiplier * resultLevel;
-					if (baseItem.getCount() > 1)
-						newCost = 40;
+					if (!baseItem.isOf(Items.ENCHANTED_BOOK)) {
+						// 1 << x = 2^x
+						newCost += costMultiplier * (1 << (resultLevel - 1));
+					}
 				}
-				if (anyFailed && !anyAccepted) {
+				// Cannot enchant stacked
+				if (enchanted && baseItem.getCount() > 1) {
+					this.output.setStack(0, ItemStack.EMPTY);
+					this.levelCost.set(0);
+					return;
+				}
+				// If all conflict
+				if (anyFailed && !enchanted) {
 					this.output.setStack(0, ItemStack.EMPTY);
 					this.levelCost.set(0);
 					return;
@@ -155,45 +169,47 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 			}
 		}
 
-		if (this.newItemName == null || Util.isBlank(this.newItemName)) {
-			// Remove name
+		boolean renamed = false;
+
+		if (this.newItemName == null || Util.isBlank(this.newItemName) ) {
 			if (baseItem.hasCustomName()) {
-				renameCost = 1;
-				newCost += renameCost;
+				// Remove name
+				renamed = true;
 				resultItem.removeCustomName();
 			}
 		} else if (!this.newItemName.equals(baseItem.getName().getString())) {
 			// Rename
-			renameCost = 1;
-			newCost += renameCost;
+			renamed = true;
 			resultItem.setCustomName(Text.literal(this.newItemName));
 		}
-		this.levelCost.set(repairCostSum + newCost);
-		if (newCost <= 0) {
-			// Some sort of error catching?
+
+		if (renamed) {
+			newCost += 1;
+		}
+
+		if (!renamed && !repaired && !enchanted) {
 			resultItem = ItemStack.EMPTY;
 		}
-		if (renameCost == newCost && renameCost > 0 && this.levelCost.get() >= 40) {
-			// You can solely rename a tool that is too expensive for 39 levels
-			this.levelCost.set(39);
-		}
-		if (this.levelCost.get() >= 40 && !this.player.getAbilities().creativeMode) {
-			// Too expensive
+
+		if (newCost >= LogicalAnvil.TOO_EXPENSIVE_SIGNAL) {
 			resultItem = ItemStack.EMPTY;
 		}
+
+		this.levelCost.set(newCost);
 		if (!resultItem.isEmpty()) {
 			// Add previous repair cost & apply enchantments
-			int resultRepairCost = resultItem.getRepairCost();
-			if (!sacrificeItem.isEmpty() && resultRepairCost < sacrificeItem.getRepairCost()) {
-				resultRepairCost = sacrificeItem.getRepairCost();
-			}
-			if (renameCost != newCost || renameCost == 0) {
-				resultRepairCost = AnvilScreenHandler.getNextCost(resultRepairCost);
-			}
-			resultItem.setRepairCost(resultRepairCost);
+			resultItem.setRepairCost(repairCost);
 			EnchantmentHelper.set(enchantments, resultItem);
 		}
 		this.output.setStack(0, resultItem);
 		this.sendContentUpdates();
+	}
+
+	@Redirect(
+			method = "canTakeOutput",
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/screen/Property;get()I", ordinal = 1)
+	)
+	public int allowFree(Property instance) {
+		return 1;
 	}
 }
