@@ -39,80 +39,91 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 	 */
 	@Overwrite
 	public void updateResult() {
-		ItemStack baseItem = this.input.getStack(0);
 		this.levelCost.set(1);
-		int accumCost = 0;
-		int totalRepairCost = 0;
-		int renameCost = 0;
+
+		ItemStack baseItem = this.input.getStack(0);
+
 		if (baseItem.isEmpty()) {
 			this.output.setStack(0, ItemStack.EMPTY);
 			this.levelCost.set(0);
 			return;
 		}
-		ItemStack modBaseItem = baseItem.copy();
+
+		ItemStack resultItem = baseItem.copy();
 		ItemStack sacrificeItem = this.input.getStack(1);
 
-		Map<Enchantment, Integer> currentEnchantments = EnchantmentHelper.get(modBaseItem);
+		Map<Enchantment, Integer> enchantments = EnchantmentHelper.get(resultItem);
 
-		totalRepairCost += baseItem.getRepairCost() + (sacrificeItem.isEmpty() ? 0 : sacrificeItem.getRepairCost());
+		int newCost = 0;
+		int repairCostSum = baseItem.getRepairCost() + sacrificeItem.getRepairCost();
+		int renameCost = 0;
+
+
 		this.repairItemUsage = 0;
 
 		if (!sacrificeItem.isEmpty()) {
 			boolean isEnchantedBook = sacrificeItem.isOf(Items.ENCHANTED_BOOK) && !EnchantedBookItem.getEnchantmentNbt(sacrificeItem).isEmpty();
 
-			// Unit repair
-			if (modBaseItem.isDamageable() && modBaseItem.getItem().canRepair(baseItem, sacrificeItem)) {
+			if (resultItem.isDamageable() && resultItem.getItem().canRepair(baseItem, sacrificeItem)) {
+				// UNIT REPAIR
+
 				int repairCount;
-				int clampedDamage = Math.min(modBaseItem.getDamage(), modBaseItem.getMaxDamage() / 4);
+				int clampedDamage = Math.min(resultItem.getDamage(), resultItem.getMaxDamage() / 4);
 				if (clampedDamage <= 0) {
 					this.output.setStack(0, ItemStack.EMPTY);
 					this.levelCost.set(0);
 					return;
 				}
 				for (repairCount = 0; clampedDamage > 0 && repairCount < sacrificeItem.getCount(); ++repairCount) {
-					int damageAfterRepair = modBaseItem.getDamage() - clampedDamage;
-					modBaseItem.setDamage(damageAfterRepair);
-					++accumCost;
-					clampedDamage = Math.min(modBaseItem.getDamage(), modBaseItem.getMaxDamage() / 4);
+					int damageAfterRepair = resultItem.getDamage() - clampedDamage;
+					resultItem.setDamage(damageAfterRepair);
+					++newCost;
+					clampedDamage = Math.min(resultItem.getDamage(), resultItem.getMaxDamage() / 4);
 				}
 				this.repairItemUsage = repairCount;
 			} else {
-				if (!(isEnchantedBook || modBaseItem.isOf(sacrificeItem.getItem()) && modBaseItem.isDamageable())) {
+				// COMBINATION
+
+				// If cannot apply
+				if (!(isEnchantedBook || resultItem.isOf(sacrificeItem.getItem()) && resultItem.isDamageable())) {
 					this.output.setStack(0, ItemStack.EMPTY);
 					this.levelCost.set(0);
 					return;
 				}
-				if (modBaseItem.isDamageable() && !isEnchantedBook) {
+
+				// Combination repair
+				if (resultItem.isDamageable() && !isEnchantedBook) {
 					int remainingDurability = baseItem.getMaxDamage() - baseItem.getDamage();
 					int sacrificeDurability = sacrificeItem.getMaxDamage() - sacrificeItem.getDamage();
-					int durabilityRepaired = sacrificeDurability + modBaseItem.getMaxDamage() * 12 / 100;
+					int durabilityRepaired = sacrificeDurability + resultItem.getMaxDamage() * 12 / 100;
 					int resultDurability = remainingDurability + durabilityRepaired;
-					int resultDamage = modBaseItem.getMaxDamage() - resultDurability;
+					int resultDamage = resultItem.getMaxDamage() - resultDurability;
 					if (resultDamage < 0) {
 						resultDamage = 0;
 					}
-					if (resultDamage < modBaseItem.getDamage()) {
-						modBaseItem.setDamage(resultDamage);
-						accumCost += 2;
+					if (resultDamage < resultItem.getDamage()) {
+						resultItem.setDamage(resultDamage);
+						newCost += 2;
 					}
 				}
 
+				// Enchantment transfer
 				Map<Enchantment, Integer> sacrificeEnchantments = EnchantmentHelper.get(sacrificeItem);
 				boolean anyAccepted = false;
 				boolean anyFailed = false;
 				for (Enchantment enchantment : sacrificeEnchantments.keySet()) {
 					int resultLevel;
 					if (enchantment == null) continue;
-					int currentLevel = currentEnchantments.getOrDefault(enchantment, 0);
+					int currentLevel = enchantments.getOrDefault(enchantment, 0);
 					resultLevel = currentLevel == (resultLevel = sacrificeEnchantments.get(enchantment)) ? resultLevel + 1 : Math.max(resultLevel, currentLevel);
 					boolean acceptsEnchantment = enchantment.isAcceptableItem(baseItem);
 					if (this.player.getAbilities().creativeMode || baseItem.isOf(Items.ENCHANTED_BOOK)) {
 						acceptsEnchantment = true;
 					}
-					for (Enchantment enchantment2 : currentEnchantments.keySet()) {
+					for (Enchantment enchantment2 : enchantments.keySet()) {
 						if (enchantment2 == enchantment || enchantment.canCombine(enchantment2)) continue;
 						acceptsEnchantment = false;
-						++accumCost;
+						++newCost;
 					}
 					if (!acceptsEnchantment) {
 						anyFailed = true;
@@ -122,31 +133,19 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 					if (resultLevel > enchantment.getMaxLevel()) {
 						resultLevel = enchantment.getMaxLevel();
 					}
-					currentEnchantments.put(enchantment, resultLevel);
-					int costMultiplier = 0;
-					switch (enchantment.getRarity()) {
-						case COMMON: {
-							costMultiplier = 1;
-							break;
-						}
-						case UNCOMMON: {
-							costMultiplier = 2;
-							break;
-						}
-						case RARE: {
-							costMultiplier = 4;
-							break;
-						}
-						case VERY_RARE: {
-							costMultiplier = 8;
-						}
-					}
+					enchantments.put(enchantment, resultLevel);
+					int costMultiplier = switch (enchantment.getRarity()) {
+						case COMMON -> 1;
+						case UNCOMMON -> 2;
+						case RARE -> 4;
+						case VERY_RARE -> 8;
+					};
 					if (isEnchantedBook) {
 						costMultiplier = Math.max(1, costMultiplier / 2);
 					}
-					accumCost += costMultiplier * resultLevel;
-					if (baseItem.getCount() <= 1) continue;
-					accumCost = 40;
+					newCost += costMultiplier * resultLevel;
+					if (baseItem.getCount() > 1)
+						newCost = 40;
 				}
 				if (anyFailed && !anyAccepted) {
 					this.output.setStack(0, ItemStack.EMPTY);
@@ -155,39 +154,46 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 				}
 			}
 		}
+
 		if (this.newItemName == null || Util.isBlank(this.newItemName)) {
+			// Remove name
 			if (baseItem.hasCustomName()) {
 				renameCost = 1;
-				accumCost += renameCost;
-				modBaseItem.removeCustomName();
+				newCost += renameCost;
+				resultItem.removeCustomName();
 			}
 		} else if (!this.newItemName.equals(baseItem.getName().getString())) {
+			// Rename
 			renameCost = 1;
-			accumCost += renameCost;
-			modBaseItem.setCustomName(Text.literal(this.newItemName));
+			newCost += renameCost;
+			resultItem.setCustomName(Text.literal(this.newItemName));
 		}
-		this.levelCost.set(totalRepairCost + accumCost);
-		if (accumCost <= 0) {
-			modBaseItem = ItemStack.EMPTY;
+		this.levelCost.set(repairCostSum + newCost);
+		if (newCost <= 0) {
+			// Some sort of error catching?
+			resultItem = ItemStack.EMPTY;
 		}
-		if (renameCost == accumCost && renameCost > 0 && this.levelCost.get() >= 40) {
+		if (renameCost == newCost && renameCost > 0 && this.levelCost.get() >= 40) {
+			// You can solely rename a tool that is too expensive for 39 levels
 			this.levelCost.set(39);
 		}
 		if (this.levelCost.get() >= 40 && !this.player.getAbilities().creativeMode) {
-			modBaseItem = ItemStack.EMPTY;
+			// Too expensive
+			resultItem = ItemStack.EMPTY;
 		}
-		if (!modBaseItem.isEmpty()) {
-			int baseRepairCost = modBaseItem.getRepairCost();
-			if (!sacrificeItem.isEmpty() && baseRepairCost < sacrificeItem.getRepairCost()) {
-				baseRepairCost = sacrificeItem.getRepairCost();
+		if (!resultItem.isEmpty()) {
+			// Add previous repair cost & apply enchantments
+			int resultRepairCost = resultItem.getRepairCost();
+			if (!sacrificeItem.isEmpty() && resultRepairCost < sacrificeItem.getRepairCost()) {
+				resultRepairCost = sacrificeItem.getRepairCost();
 			}
-			if (renameCost != accumCost || renameCost == 0) {
-				baseRepairCost = AnvilScreenHandler.getNextCost(baseRepairCost);
+			if (renameCost != newCost || renameCost == 0) {
+				resultRepairCost = AnvilScreenHandler.getNextCost(resultRepairCost);
 			}
-			modBaseItem.setRepairCost(baseRepairCost);
-			EnchantmentHelper.set(currentEnchantments, modBaseItem);
+			resultItem.setRepairCost(resultRepairCost);
+			EnchantmentHelper.set(enchantments, resultItem);
 		}
-		this.output.setStack(0, modBaseItem);
+		this.output.setStack(0, resultItem);
 		this.sendContentUpdates();
 	}
 }
