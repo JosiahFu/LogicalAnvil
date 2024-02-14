@@ -3,15 +3,15 @@
 	"id": "logicalanvil",
 	"version": "${version}",
 	"name": "LogicalAnvil",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "Makes anvil costs more fair and simple",
 	"authors": [
-		"Me!"
+		"ThePotatoArchivist"
 	],
 	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
+		"homepage": "https://modrinth.com/mod/logical-anvil/",
+		"sources": "https://github.com/JosiahFu/LogicalAnvil"
 	},
-	"license": "CC0-1.0",
+	"license": "MIT",
 	"icon": "assets/logicalanvil/icon.png",
 	"environment": "*",
 	"entrypoints": {
