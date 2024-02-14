@@ -1,13 +1,10 @@
 package archives.tater.logicalanvil.mixin;
 
 import archives.tater.logicalanvil.LogicalAnvil;
-import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.EnchantmentHelper;
 import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.EnchantedBookItem;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
+import net.minecraft.item.*;
 import net.minecraft.screen.*;
 import net.minecraft.text.Text;
 import net.minecraft.util.Util;
@@ -27,9 +24,33 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 	private int repairItemUsage;
 	@Shadow
 	private String newItemName;
+	@Unique
+	private static final int repairMultiplier = 4;
 
 	public AnvilScreenHandlerMixin(@Nullable ScreenHandlerType<?> type, int syncId, PlayerInventory playerInventory, ScreenHandlerContext context) {
 		super(type, syncId, playerInventory, context);
+	}
+
+	@Unique
+	private static int getMaterialCost(Item item) {
+		if (item instanceof PickaxeItem)
+			return 3;
+		if (item instanceof SwordItem)
+			return 2;
+		if (item instanceof AxeItem)
+			return 3;
+		if (item instanceof HoeItem)
+			return 2;
+		if (item instanceof ArmorItem armorItem) {
+			return switch (armorItem.getSlotType()) {
+                case FEET -> 4;
+                case LEGS -> 7;
+                case CHEST -> 8;
+                case HEAD -> 5;
+				default -> 4;
+            };
+		}
+		return 4;
 	}
 
 	/**
@@ -53,9 +74,13 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 
 		Map<Enchantment, Integer> enchantments = EnchantmentHelper.get(resultItem);
 
+		int baseDamage = baseItem.getDamage();
+		int newDamage = baseDamage;
+		int maxDamage = baseItem.getMaxDamage();
+
 		int newCost = 0;
 		int repairCost = baseItem.getRepairCost() + sacrificeItem.getRepairCost();
-		boolean repaired = false;
+		int repairedAmount = 0;
 		boolean enchanted = false;
 
 		this.repairItemUsage = 0;
@@ -66,24 +91,32 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 			if (resultItem.isDamageable() && resultItem.getItem().canRepair(baseItem, sacrificeItem)) {
 				// UNIT REPAIR
 
+				int materialCost = getMaterialCost(baseItem.getItem());
+
 				int repairCount;
-				int clampedDamage = Math.min(resultItem.getDamage(), resultItem.getMaxDamage() / 4);
-				if (clampedDamage <= 0) {
+
+				if (newDamage == 0) {
 					this.output.setStack(0, ItemStack.EMPTY);
 					this.levelCost.set(0);
 					return;
 				}
-				for (repairCount = 0; clampedDamage > 0 && repairCount < sacrificeItem.getCount(); ++repairCount) {
-					int damageAfterRepair = resultItem.getDamage() - clampedDamage;
-					resultItem.setDamage(damageAfterRepair);
-					repairCost++;
-					newCost += repairCost;
-					if (repairCost >= 40) {
-						newCost = LogicalAnvil.TOO_EXPENSIVE_SIGNAL;
-					}
-					clampedDamage = Math.min(resultItem.getDamage(), resultItem.getMaxDamage() / 4);
+
+				if (!player.isCreative() && repairCost + repairedAmount > maxDamage * repairMultiplier) {
+					newCost = LogicalAnvil.TOO_EXPENSIVE_SIGNAL;
 				}
-				repaired = true;
+
+				for (repairCount = 0; newDamage > 0 && repairCount < sacrificeItem.getCount(); ++repairCount) {
+					newDamage -= maxDamage / materialCost;
+					repairedAmount =  baseDamage - newDamage;
+					if (!player.isCreative() && repairCost + repairedAmount > maxDamage * repairMultiplier) {
+						repairCount++;
+						break;
+					}
+				}
+
+				newDamage = Math.max(newDamage, Math.max(0, maxDamage - (maxDamage * repairMultiplier - repairCost)));
+
+				resultItem.setDamage(newDamage);
 				this.repairItemUsage = repairCount;
 			} else {
 				// COMBINATION
@@ -97,7 +130,7 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 
 				// Combination repair
 				if (resultItem.isDamageable() && !isEnchantedBook) {
-					int remainingDurability = baseItem.getMaxDamage() - baseItem.getDamage();
+					int remainingDurability = maxDamage - baseDamage;
 					int sacrificeDurability = sacrificeItem.getMaxDamage() - sacrificeItem.getDamage();
 					int durabilityRepaired = sacrificeDurability + resultItem.getMaxDamage() * 12 / 100;
 					int resultDurability = remainingDurability + durabilityRepaired;
@@ -107,10 +140,10 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 					}
 					if (resultDamage < resultItem.getDamage()) {
 						resultItem.setDamage(resultDamage);
-						repairCost += 2;
-						newCost += repairCost;
-						if (repairCost >= 40)
+						repairedAmount = baseDamage - resultDamage;
+						if (!player.isCreative() && repairCost + repairedAmount > baseItem.getMaxDamage() * repairMultiplier) {
 							newCost = LogicalAnvil.TOO_EXPENSIVE_SIGNAL;
+						}
 					}
 				}
 
@@ -149,7 +182,7 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 					if (isEnchantedBook) {
 						costMultiplier = Math.max(1, costMultiplier / 2);
 					}
-					if (!baseItem.isOf(Items.ENCHANTED_BOOK)) {
+					if (!baseItem.isOf(Items.ENCHANTED_BOOK) && sacrificeItem.isOf(Items.ENCHANTED_BOOK)) {
 						// 1 << x = 2^x
 						newCost += costMultiplier * (1 << (resultLevel - 1));
 					}
@@ -187,7 +220,15 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 			newCost += 1;
 		}
 
-		if (!renamed && !repaired && !enchanted) {
+		LogicalAnvil.LOGGER.info("{} {}", repairedAmount, newCost);
+		int newRepairCost = repairCost;
+		if (repairedAmount > 0) {
+			newRepairCost += repairedAmount;
+			newCost += 40 * (newRepairCost * newRepairCost - repairCost * repairCost) / (maxDamage * maxDamage * (2 * repairMultiplier - 1));
+		}
+		LogicalAnvil.LOGGER.info("{}", newCost);
+
+		if (!renamed && repairedAmount == 0 && !enchanted) {
 			resultItem = ItemStack.EMPTY;
 		}
 
@@ -198,7 +239,7 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 		this.levelCost.set(newCost);
 		if (!resultItem.isEmpty()) {
 			// Add previous repair cost & apply enchantments
-			resultItem.setRepairCost(repairCost);
+			resultItem.setRepairCost(newRepairCost);
 			EnchantmentHelper.set(enchantments, resultItem);
 		}
 		this.output.setStack(0, resultItem);
