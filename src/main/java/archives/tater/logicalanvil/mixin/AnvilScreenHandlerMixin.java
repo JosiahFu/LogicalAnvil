@@ -172,20 +172,18 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 					if (resultLevel > enchantment.getMaxLevel()) {
 						resultLevel = enchantment.getMaxLevel();
 					}
-					enchantments.put(enchantment, resultLevel);
-					int costMultiplier = switch (enchantment.getRarity()) {
-						case COMMON -> 1;
-						case UNCOMMON -> 2;
-						case RARE -> 4;
-						case VERY_RARE -> 8;
-					};
-					if (isEnchantedBook) {
-						costMultiplier = Math.max(1, costMultiplier / 2);
-					}
-					if (!baseItem.isOf(Items.ENCHANTED_BOOK) && sacrificeItem.isOf(Items.ENCHANTED_BOOK)) {
+					if (!baseItem.isOf(Items.ENCHANTED_BOOK) && sacrificeItem.isOf(Items.ENCHANTED_BOOK) &&
+							(!enchantments.containsKey(enchantment) || resultLevel >= enchantments.get(enchantment))) {
+						int costMultiplier = switch (enchantment.getRarity()) {
+							case COMMON -> 1;
+							case UNCOMMON -> 2;
+							case RARE -> 4;
+							case VERY_RARE -> 8;
+						};
 						// 1 << x = 2^x
-						newCost += costMultiplier * (1 << (resultLevel - 1));
+						newCost += costMultiplier * (1 << (sacrificeEnchantments.get(enchantment) - 1));
 					}
+					enchantments.put(enchantment, resultLevel);
 				}
 				// Cannot enchant stacked
 				if (enchanted && baseItem.getCount() > 1) {
@@ -220,13 +218,11 @@ abstract public class AnvilScreenHandlerMixin extends ForgingScreenHandler {
 			newCost += 1;
 		}
 
-		LogicalAnvil.LOGGER.info("{} {}", repairedAmount, newCost);
 		int newRepairCost = repairCost;
 		if (repairedAmount > 0) {
 			newRepairCost += repairedAmount;
-			newCost += 40 * (newRepairCost * newRepairCost - repairCost * repairCost) / (maxDamage * maxDamage * (2 * repairMultiplier - 1));
+			newCost += Math.max(1, 40 * (newRepairCost * newRepairCost - repairCost * repairCost) / (maxDamage * maxDamage * (2 * repairMultiplier - 1)));
 		}
-		LogicalAnvil.LOGGER.info("{}", newCost);
 
 		if (!renamed && repairedAmount == 0 && !enchanted) {
 			resultItem = ItemStack.EMPTY;
